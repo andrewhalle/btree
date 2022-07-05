@@ -1,0 +1,11 @@
+[package]
+name = "btree"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rmp-serde = "1.1.0"
+serde = { version = "1.0.138", features = ["derive"] }
+thiserror = "1.0.31"
