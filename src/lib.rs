@@ -22,6 +22,8 @@ pub struct NodeData<K, V> {
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("Cannot insert into the node because it is too full.")]
+    NeedsSplit,
     #[error("An I/O error occurred.")]
     Io(#[from] io::Error),
     #[error("A serialization error occurred.")]
@@ -30,7 +32,7 @@ pub enum Error {
 
 impl<K, V> Node<K, V>
 where
-    K: Serialize,
+    K: Serialize + Ord,
     V: Serialize,
 {
     fn reset_file(&mut self) -> Result<(), Error> {
@@ -40,16 +42,16 @@ where
         Ok(())
     }
 
-    pub fn new(path: PathBuf) -> Result<Self, Error> {
+    pub fn new(path: PathBuf, capacity: usize) -> Result<Self, Error> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
             .open(path)?;
         let data = NodeData {
-            keys: Vec::new(),
-            values: Vec::new(),
-            children: Vec::new(),
+            keys: Vec::with_capacity(capacity),
+            values: Vec::with_capacity(capacity),
+            children: Vec::with_capacity(capacity + 1),
         };
 
         Ok(Node { file, data })
@@ -63,8 +65,20 @@ where
         Ok(())
     }
 
-    pub fn insert(&mut self, key: K, value: V) {
-        self.data.keys.push(key);
-        self.data.values.push(value);
+    pub fn insert_if_space(&mut self, key: K, value: V) -> Result<(), Error> {
+        let idx = &self.data.keys[..].binary_search(&key);
+
+        match idx {
+            Ok(idx) => Ok(self.data.values[*idx] = value),
+            Err(idx) => {
+                if self.data.keys.len() < self.data.keys.capacity() {
+                    self.data.keys.insert(*idx, key);
+                    self.data.values.insert(*idx, value);
+                    Ok(())
+                } else {
+                    Err(Error::NeedsSplit)
+                }
+            }
+        }
     }
 }
