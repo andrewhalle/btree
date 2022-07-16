@@ -9,3 +9,4 @@ edition = "2021"
 rmp-serde = "1.1.0"
 serde = { version = "1.0.138", features = ["derive"] }
 thiserror = "1.0.31"
+uuid = { version = "1.1.2", features = ["v4"] }
