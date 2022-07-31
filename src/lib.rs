@@ -36,8 +36,6 @@ pub enum Error {
 
 #[derive(thiserror::Error, Debug)]
 enum NodeError {
-    #[error("Cannot insert into the node because it is too full.")]
-    NeedsSplit,
     #[error("An I/O error occurred.")]
     Io(#[from] io::Error),
     #[error("A serialization error occurred.")]
@@ -101,6 +99,73 @@ where
     }
 }
 
+impl<K, V> NodeData<K, V>
+where
+    K: for<'a> Deserialize<'a> + Serialize + Ord,
+    V: for<'a> Deserialize<'a> + Serialize,
+{
+    fn new(capacity: usize) -> Self {
+        assert!(capacity % 2 == 1 && capacity > 3);
+
+        Self {
+            keys: Vec::with_capacity(capacity),
+            values: Vec::with_capacity(capacity),
+            children: None,
+        }
+    }
+
+    // This method assumes there is space to insert a new value if needed. If this proves untrue,
+    // panic.
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        let idx = &self.keys[..].binary_search(&key);
+
+        match idx {
+            Ok(idx) => {
+                let old = value;
+                mem::swap(&mut old, &mut self.values[*idx]);
+                Some(old)
+            }
+            Err(idx) => {
+                if !self.is_full() {
+                    self.keys.insert(*idx, key);
+                    self.values.insert(*idx, value);
+                    None
+                } else {
+                    panic!("insert called on Node without remaining space.")
+                }
+            }
+        }
+    }
+
+    fn is_leaf(&self) -> bool {
+        self.children.is_none()
+    }
+
+    fn is_full(&self) -> bool {
+        self.keys.len() == self.keys.capacity()
+    }
+
+    // Splits self on the middle value and returns the split value and the new NodeData.
+    fn split(&mut self) -> (K, V, Self) {
+        assert!(self.is_full());
+
+        let split_idx = self.keys.capacity() / 2 + 1;
+        let keys = self.keys.split_off(split_idx);
+        let values = self.values.split_off(split_idx);
+        let children = self.children.as_mut().map(|v| v.split_off(split_idx));
+        let other = NodeData::new(self.keys.capacity());
+        other.keys.append(&mut keys);
+        other.values.append(&mut values);
+        other.children = children;
+
+        // .unwrap() is fine here, because we know this value will exist.
+        let key = self.keys.pop().unwrap();
+        let value = self.values.pop().unwrap();
+
+        (key, value, other)
+    }
+}
+
 impl<K, V> Node<K, V>
 where
     K: for<'a> Deserialize<'a> + Serialize + Ord,
@@ -114,16 +179,15 @@ where
     }
 
     fn new(path: PathBuf, capacity: usize) -> Result<Self, NodeError> {
+        Node::new_with_data(path, NodeData::new(capacity))
+    }
+
+    fn new_with_data(path: PathBuf, data: NodeData<K, V>) -> Result<Self, NodeError> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
             .open(path)?;
-        let data = NodeData {
-            keys: Vec::with_capacity(capacity),
-            values: Vec::with_capacity(capacity),
-            children: None,
-        };
 
         Ok(Node { file, data })
     }
@@ -136,33 +200,17 @@ where
         Ok(())
     }
 
-    // TODO: This should return Result<Option<V>, NodeError> to handle the case of the value
-    // already existing.
-    fn insert_if_space(&mut self, key: K, value: V) -> Result<(), NodeError> {
-        let idx = &self.data.keys[..].binary_search(&key);
-
-        match idx {
-            Ok(idx) => Ok(self.data.values[*idx] = value),
-            Err(idx) => {
-                if self.data.keys.len() < self.data.keys.capacity() {
-                    self.data.keys.insert(*idx, key);
-                    self.data.values.insert(*idx, value);
-                    Ok(())
-                } else {
-                    Err(NodeError::NeedsSplit)
-                }
-            }
-        }
-    }
-
-    fn is_leaf(&self) -> bool {
-        self.data.children.is_none()
-    }
-
     fn load(path: &NodeRef) -> Result<Self, NodeError> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let data = rmp_serde::from_read(file.try_clone()?)?;
 
         Ok(Self { file, data })
+    }
+
+    fn split(&mut self, other: NodeRef) -> Result<(K, V, Self), NodeError> {
+        let (key, value, data) = self.data.split();
+        let other = Node::new_with_data(other, data)?;
+
+        Ok((key, value, other))
     }
 }
