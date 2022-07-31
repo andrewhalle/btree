@@ -71,31 +71,9 @@ where
     /// If the key was already present, return the old value. If the key was not present, return
     /// None.
     pub fn insert(&mut self, key: K, mut value: V) -> Option<V> {
-        let mut curr_node = &mut self.root_node;
+        let curr_node = &mut self.root_node;
 
-        while !curr_node.is_leaf() {
-            match curr_node.data.keys[..].binary_search(&key) {
-                Ok(idx) => {
-                    mem::swap(&mut value, &mut curr_node.data.values[idx]);
-                    return Some(value);
-                }
-                Err(idx) => {
-                    let child = curr_node.data.children.as_ref().unwrap()[idx].clone();
-                    if self.node_cache.contains(&child) {
-                        curr_node = self.node_cache.get_mut(&child).unwrap();
-                    } else {
-                        let node = Node::load(&child).expect("TODO");
-                        self.node_cache.push(child.clone(), node);
-                        curr_node = self.node_cache.get_mut(&child).unwrap();
-                    }
-                }
-            }
-        }
-
-        curr_node.insert_if_space(key, value).expect("TODO");
-        curr_node.save().expect("TODO");
-
-        None
+        todo!()
     }
 }
 
