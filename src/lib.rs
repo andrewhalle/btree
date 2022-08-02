@@ -237,6 +237,6 @@ where
             .open(new_name)?;
         let old_file = mem::replace(&mut self.file, new_file);
         self.save()?;
-        // TODO
+        // TODO reset old file
     }
 }
