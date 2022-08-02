@@ -6,11 +6,13 @@ use std::path::PathBuf;
 use lru::LruCache;
 use rmp_serde::Serializer;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 type NodeRef = PathBuf;
 
 pub struct BTree<K, V> {
     root_node: Node<K, V>,
+    backing_dir: PathBuf,
     node_cache: LruCache<NodeRef, Node<K, V>>,
 }
 
@@ -32,6 +34,8 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("A serialization error occurred.")]
     Serialization(#[from] rmp_serde::encode::Error),
+    #[error("A node error occurred. {0}")]
+    Node(#[from] NodeError),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -49,31 +53,44 @@ where
     K: for<'a> Deserialize<'a> + Serialize + Ord,
     V: for<'a> Deserialize<'a> + Serialize,
 {
-    pub fn new(dir: PathBuf, capacity: usize) -> Result<Self, Error> {
-        DirBuilder::new().create(&dir)?;
-        let mut root_node = dir.clone();
+    pub fn new(backing_dir: PathBuf, capacity: usize) -> Result<Self, Error> {
+        DirBuilder::new().create(&backing_dir)?;
+        let mut root_node = backing_dir.clone();
         root_node.push("root");
-        let root_node = match Node::new(root_node, capacity) {
-            Ok(node) => node,
-            Err(NodeError::Io(e)) => {
-                return Err(Error::Io(e));
-            }
-            _ => unreachable!(),
-        };
+        let root_node = Node::new(root_node, capacity)?;
         let node_cache = LruCache::new(256);
 
         Ok(Self {
             root_node,
+            backing_dir,
             node_cache,
         })
     }
 
     /// If the key was already present, return the old value. If the key was not present, return
     /// None.
-    pub fn insert(&mut self, key: K, mut value: V) -> Option<V> {
-        let curr_node = &mut self.root_node;
+    pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>, Error> {
+        if self.root_node.is_full() {
+            let capacity = self.root_node.capacity();
+            let (key, value, right) = self.root_node.split(self.new_node_name())?;
+            self.root_node.rename(self.new_node_name())?;
+            let mut new_root = self.backing_dir.clone();
+            new_root.push("root");
+            let mut new_root = Node::new(new_root, capacity)?;
+            // This .unwrap() is safe because we just allocated the Node, so it can't have any
+            // existing values.
+            new_root.insert(key, value).unwrap();
+            self.root_node = new_root;
+        }
 
         todo!()
+    }
+
+    fn new_node_name(&self) -> NodeRef {
+        let mut path = self.backing_dir.clone();
+        path.push(Uuid::new_v4().to_string());
+
+        path
     }
 }
 
@@ -121,6 +138,10 @@ where
 
     fn is_full(&self) -> bool {
         self.keys.len() == self.keys.capacity()
+    }
+
+    fn capacity(&self) -> usize {
+        self.keys.capacity()
     }
 
     // Splits self on the middle value and returns the split value and the new NodeData.
@@ -190,5 +211,32 @@ where
         let other = Node::new_with_data(other, data)?;
 
         Ok((key, value, other))
+    }
+
+    fn is_full(&self) -> bool {
+        self.data.is_full()
+    }
+
+    fn capacity(&self) -> usize {
+        self.data.capacity()
+    }
+
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.data.insert(key, value)
+    }
+
+    fn data(self) -> NodeData<K, V> {
+        self.data
+    }
+
+    fn rename(&mut self, new_name: NodeRef) -> Result<(), NodeError> {
+        let new_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(new_name)?;
+        let old_file = mem::replace(&mut self.file, new_file);
+        self.save()?;
+        // TODO
     }
 }
